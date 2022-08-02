@@ -4,6 +4,7 @@ from flask_mysqldb import MySQL
 from requests.exceptions import HTTPError
 import logging, requests, ast, json
 from github3 import login
+from passlib.hash import pbkdf2_sha256
 
 app = Flask(__name__)
 CORS(app)
@@ -32,7 +33,8 @@ squash_pwd = "IVV_tools"
 # Default password use when creating a new user in the database
 password = "motdepasse"
 # Token generated on Github
-token = "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"
+token = "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"
+othertoker = "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"
 # Others strings
 base = ["bug", "ivv"]
 workaround = "workaround"
@@ -194,7 +196,8 @@ def fillUsersDataBase(json):
     for user in allUsers:
         # if the email isn't in the database, don't enter the person
         try:
-            v = str(user['id']) + ", '"+user['email']+"', '"+password+"'"
+            # Save the hashed password
+            v = str(user['id']) + ", '"+user['email']+"', '"+pbkdf2_sha256.hash(password)+"'"
             query = "INSERT INTO users (id, email, password) values (" + v + ");"
             cursor.execute(query)
         except mysql.connection.Error as err:
@@ -323,7 +326,8 @@ def validateUserMySQLRequest():
         mysqlresponse = cursor.fetchall()
         for row in mysqlresponse :
             password = row[1] 
-        if input_json['password'] == password:
+        # Verify if it's the same password; knowing the password in the database is hashed
+        if pbkdf2_sha256.verify(input_json['password'], password):
             response = {'valid': True, 'error': 'None'}
         else:
             # Return an error if the password isn't the same as the one in the database
@@ -464,3 +468,59 @@ def extractTagsOfIssuesfromTitle(formatedIssuesList):
                 captureTag = True;
 
     return tagList
+
+###########################################################################
+################### Unit Test #############################################
+###########################################################################
+
+# Request all issues in the database
+@app.route('/unittestnumberofbugs', methods=["POST"])
+def unitTest():
+
+    # Login to Github
+    try:
+        githubresponse = login(token=token)
+    except ValueError:
+        print("Github connexion issue or token invalid")
+        response = {'valid': False, 'error': 'Github connexion issue or token invalid'}
+
+    allCount = dict()
+    allCount.update({"all":count(["open", "closed"], githubresponse)})
+    allCount.update({"NotClose":count(["open"], githubresponse)})
+    allCount.update({"Close":(allCount['all']-allCount['NotClose'])})
+    allCount.update({"Workaround":countWorkaround(githubresponse)})
+    allCount.update({"NoWorkaround":(allCount['all']-allCount['Workaround'])})
+
+    return allCount
+
+def count(test, githubresponse):
+    count = 0
+    for state in test:          
+        listing = githubresponse.issues_on("COPRS", "rs-issues", state=state)
+        for i in listing:
+            # Save this bug only if labels are 'bug' and 'ivv'
+            if all(x in str(i.original_labels) for x in base):
+                count = count + 1
+    return count
+
+def countWorkaround(githubresponse):
+    count = 0
+    for state in ["open","closed"]:      
+        listing = githubresponse.issues_on("COPRS", "rs-issues", state=state)
+        for i in listing:
+            # Save this bug only if labels are 'bug' and 'ivv'
+            if all(x in str(i.original_labels) for x in base):
+                if (workaround in str(i.original_labels)):
+                    count = count + 1
+    return count
+
+def countNoWorkaround(githubresponse):
+    count = 0
+    for state in ["open","closed"]:      
+        listing = githubresponse.issues_on("COPRS", "rs-issues", state=state)
+        for i in listing:
+            # Save this bug only if labels are 'bug' and 'ivv'
+            if all(x in str(i.original_labels) for x in base):
+                if not (workaround in str(i.original_labels)):
+                    count = count + 1
+    return count
